@@ -3,9 +3,12 @@ import cv2
 from ConvolutionLayer import ConvolutionLayer as CONV
 from RectifiedLinearUnitLayer import RectifiedLinearUnitLayer as RELU
 from PoolingLayer import PoolingLayer as POOL
+from GlobalAveragePoolingLayer import GlobalAveragePoolingLayer as GAP
+from ClassActivationMapLayer import ClassActivationMapLayer as CAM
+from FullyConnected import FullyConnectedLayer as FC
 
 SEP = "=" * 50
-N, M, K = 3, 6, 1
+N, M, K = 3, 5, 1
 # N=nombre de blocs CONV+RELU, M=nombre de blocs avec POOL, K=nombre de blocs FC+RELU
 # INPUT -> [[CONV -> RELU]*N -> POOL]*M -> [FC -> RELU]*K -> FC
 
@@ -15,7 +18,7 @@ def save_image(data, path):
     return path
 
 def main():
-    path   = "../data/3_image_generates/outputs/bacteria-5555.jpg"
+    path   = "../data/3_image_generates/outputs/bacteria-8000.jpg"
     kernel = np.array([[0, 1, 1], [0, 0, 1], [-1, -1, 0]])
     stride = 1
 
@@ -43,8 +46,8 @@ def main():
 
         for n in range(N):
             # --- CONV ---
-            conv_layer = CONV(kernel, stride)
-            data = conv_layer.forward(data)
+            conv = CONV(kernel, stride)
+            data = conv.forward(data)
             tag = f"bloc{m+1}_conv{n+1}"
             save_image(data, f"outputs/{tag}.jpg")
             print(f"[CONV {m+1}.{n+1}] Sortie : {data.shape[1]}x{data.shape[0]} px"
