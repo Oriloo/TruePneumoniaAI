@@ -6,6 +6,7 @@ from PoolingLayer import PoolingLayer as POOL
 from GlobalAveragePoolingLayer import GlobalAveragePoolingLayer as GAP
 from ClassActivationMapLayer import ClassActivationMapLayer as CAM
 from FullyConnected import FullyConnectedLayer as FC
+from SoftmaxLayer import SoftmaxLayer as SOFTMAX
 
 SEP = "=" * 50
 N, M = 3, 5 # N=nombre de blocs CONV+RELU, M=nombre de blocs avec POOL
@@ -85,14 +86,18 @@ def main():
     print(SEP)
 
     # --- FC ---
+    softmax = SOFTMAX()
+
     fc1 = FC(data.shape[0], FC_HIDDEN)
     data = relu.forward(fc1.forward(data))
     fc2 = FC(FC_HIDDEN, 3)
+
     output = fc2.forward(data)
+    output = softmax.forward(output)
     print(
-        f"[OK] Normal    = {output[0]:.4f}\n"
-        f"[OK] Bactérien = {output[1]:.4f}\n"
-        f"[OK] Viral     = {output[2]:.4f}"
+        f"[OK] Normal    = {output[0]:.2f}\n"
+        f"[OK] Bactérien = {output[1]:.2f}\n"
+        f"[OK] Viral     = {output[2]:.2f}"
     )
 
     print(f"\n{SEP}")
