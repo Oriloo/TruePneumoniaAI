@@ -2,3 +2,5 @@ Pillow
 matplotlib
 opencv-python
 numpy
+fastapi
+uvicorn[standard]
