@@ -15,4 +15,5 @@ chest_Xray/
 
 # Outputs générés
 data/*/outputs/*.jpg
+data/dataset/*/*.jpg
 ai/outputs/*.jpg
