@@ -12,12 +12,6 @@ N, M, K = 3, 5, 1
 # N=nombre de blocs CONV+RELU, M=nombre de blocs avec POOL, K=nombre de blocs FC+RELU
 # INPUT -> [[CONV -> RELU]*N -> POOL]*M -> [FC -> RELU]*K -> FC
 
-def save_image(data, path):
-    d = np.mean(data, axis=2) if data.ndim == 3 else data
-    norm = cv2.normalize(d, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    cv2.imwrite(path, norm)
-    return path
-
 def main():
     path   = "../data/3_image_generates/outputs/bacteria-8000.jpg"
     kernel = np.array([
@@ -29,7 +23,6 @@ def main():
 
     print(SEP)
     print("  TruePneumoniaAI — Pipeline CNN")
-    print(f"  Architecture : [[CONV -> RELU]*{N} -> POOL]*{M}")
     print(SEP)
 
     image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
@@ -44,26 +37,20 @@ def main():
     pool = POOL(pool_size=2, stride=2)
     data = image.astype(np.float64)
 
+    print(f"\n{SEP}")
+    print("  CONV / RELU / POOL")
+    print(SEP)
+
     for m in range(M):
-        print(f"\n{SEP}")
-        print(f"  Bloc {m+1}/{M}")
-        print(SEP)
+        print(f"[OK] Bloc {m+1}/{M}")
 
         for n in range(N):
             # --- CONV ---
             conv = CONV(kernel, stride)
             data = conv.forward(data)
-            tag = f"bloc{m+1}_conv{n+1}"
-            save_image(data, f"outputs/{tag}.jpg")
-            print(f"[CONV {m+1}.{n+1}] Sortie : {data.shape[1]}x{data.shape[0]}x{data.shape[2]}"
-                  f"  min={data.min():.1f}  max={data.max():.1f}  -> {tag}.jpg")
 
             # --- RELU ---
             data = relu.forward(data)
-            tag = f"bloc{m+1}_relu{n+1}"
-            save_image(data, f"outputs/{tag}.jpg")
-            print(f"[RELU {m+1}.{n+1}] Sortie : {data.shape[1]}x{data.shape[0]}x{data.shape[2]}"
-                  f"  min={data.min():.1f}  max={data.max():.1f}  -> {tag}.jpg")
 
         # --- POOL ---
         D = data.shape[2]
@@ -73,10 +60,26 @@ def main():
             p = pool.forward(fm[np.newaxis, np.newaxis, :, :])[0, 0]
             pooled.append(p)
         data = np.stack(pooled, axis=2)
-        tag = f"bloc{m+1}_pool"
-        save_image(data, f"outputs/{tag}.jpg")
-        print(f"[POOL {m+1}  ] Sortie : {data.shape[1]}x{data.shape[0]}x{data.shape[2]}"
-              f"  min={data.min():.1f}  max={data.max():.1f}  -> {tag}.jpg")
+
+    # --- GAP ---
+    last_feature_maps = data
+    gap = GAP()
+    data = gap.forward(data)
+    print(f"\n{SEP}")
+    print("  GAP")
+    print(SEP)
+    print(f"[OK] Vecteur GAP : {data.shape[0]} valeurs")
+
+    # --- CAM ---
+    cam_weights = np.ones(data.shape[0])
+    cam_layer = CAM()
+    cam_map = cam_layer.forward(last_feature_maps, cam_weights)
+    cam_path = "outputs/cam_output.jpg"
+    cv2.imwrite(cam_path, cam_map)
+    print(f"\n{SEP}")
+    print("  CAM")
+    print(SEP)
+    print(f"[OK] CAM : {cam_map.shape[1]}x{cam_map.shape[0]} px  -> {cam_path}")
 
     print(f"\n{SEP}")
     print("  Pipeline terminé")
