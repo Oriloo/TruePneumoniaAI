@@ -8,9 +8,8 @@ from ClassActivationMapLayer import ClassActivationMapLayer as CAM
 from FullyConnected import FullyConnectedLayer as FC
 
 SEP = "=" * 50
-N, M, K = 3, 5, 1
-# N=nombre de blocs CONV+RELU, M=nombre de blocs avec POOL, K=nombre de blocs FC+RELU
-# INPUT -> [[CONV -> RELU]*N -> POOL]*M -> [FC -> RELU]*K -> FC
+N, M = 3, 5 # N=nombre de blocs CONV+RELU, M=nombre de blocs avec POOL
+FC_HIDDEN = 128 # Nombre de neurones dans la couche entièrement connectée
 
 def main():
     path   = "../data/3_image_generates/outputs/bacteria-8000.jpg"
@@ -30,8 +29,8 @@ def main():
         print(f"[ERREUR] Impossible de charger '{path}'")
         return
 
-    print(f"[OK] Image    : {image.shape[1]}x{image.shape[0]} px")
-    print(f"[OK] Kernel   : {kernel.shape[0]}x{kernel.shape[1]}")
+    print(f"[OK] Image  : {image.shape[1]}x{image.shape[0]} px")
+    print(f"[OK] Kernel : {kernel.shape[0]}x{kernel.shape[1]}x{kernel.shape[2]}")
 
     relu = RELU()
     pool = POOL(pool_size=2, stride=2)
@@ -79,7 +78,22 @@ def main():
     print(f"\n{SEP}")
     print("  CAM")
     print(SEP)
-    print(f"[OK] CAM : {cam_map.shape[1]}x{cam_map.shape[0]} px  -> {cam_path}")
+    print(f"[OK] CAM : {cam_map.shape[1]}x{cam_map.shape[0]} px -> {cam_path}")
+
+    print(f"\n{SEP}")
+    print("  FC")
+    print(SEP)
+
+    # --- FC ---
+    fc1 = FC(data.shape[0], FC_HIDDEN)
+    data = relu.forward(fc1.forward(data))
+    fc2 = FC(FC_HIDDEN, 3)
+    output = fc2.forward(data)
+    print(
+        f"[OK] Normal    = {output[0]:.4f}\n"
+        f"[OK] Bactérien = {output[1]:.4f}\n"
+        f"[OK] Viral     = {output[2]:.4f}"
+    )
 
     print(f"\n{SEP}")
     print("  Pipeline terminé")
