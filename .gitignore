@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+
+# macOS
+.DS_Store
+
+# Dataset (trop volumineux pour git)
+chest_Xray/
+
+# Outputs générés
+data/*/outputs/
+ai/outputs/
