@@ -14,3 +14,18 @@ class ConvolutionLayer:
 
     def kernel_convolution(self, patch):
         return np.sum(patch * self.kernel)
+
+    def forward(self, image):
+        kernel_h, kernel_w = self.kernel.shape
+        img_h, img_w = image.shape
+        out_h = (img_h - kernel_h) // self.stride + 1
+        out_w = (img_w - kernel_w) // self.stride + 1
+        output = np.zeros((out_h, out_w), dtype=np.float64)
+        row, col = 0, 0
+        for patch in self.patch_generator(image):
+            output[row, col] = self.kernel_convolution(patch)
+            col += 1
+            if col >= out_w:
+                col = 0
+                row += 1
+        return output

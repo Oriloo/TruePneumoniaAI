@@ -14,23 +14,8 @@ def save_image(data, path):
     cv2.imwrite(path, norm)
     return path
 
-def build_convolved_output(conv_layer, image):
-    kernel_h, kernel_w = conv_layer.kernel.shape
-    img_h, img_w = image.shape
-    out_h = (img_h - kernel_h) // conv_layer.stride + 1
-    out_w = (img_w - kernel_w) // conv_layer.stride + 1
-    output = np.zeros((out_h, out_w), dtype=np.float64)
-    row, col = 0, 0
-    for patch in conv_layer.patch_generator(image):
-        output[row, col] = conv_layer.kernel_convolution(patch)
-        col += 1
-        if col >= out_w:
-            col = 0
-            row += 1
-    return output
-
 def main():
-    path   = "../data/3_image_generates/outputs/bacteria-5012.jpg"
+    path   = "../data/3_image_generates/outputs/bacteria-5555.jpg"
     kernel = np.array([[0, 1, 1], [0, 0, 1], [-1, -1, 0]])
     stride = 1
 
@@ -59,7 +44,7 @@ def main():
         for n in range(N):
             # --- CONV ---
             conv_layer = CONV(kernel, stride)
-            data = build_convolved_output(conv_layer, data)
+            data = conv_layer.forward(data)
             tag = f"bloc{m+1}_conv{n+1}"
             save_image(data, f"outputs/{tag}.jpg")
             print(f"[CONV {m+1}.{n+1}] Sortie : {data.shape[1]}x{data.shape[0]} px"
