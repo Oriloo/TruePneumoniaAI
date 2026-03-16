@@ -1,9 +1,18 @@
 import numpy as np
 
+
 class ConvolutionLayer:
     def __init__(self, kernel, stride):
-        self.kernel = kernel # [nb_filtres, kH, kW, D_entrée]
+        self.kernel = np.array(kernel, dtype=np.float64)
         self.stride = stride
+        self._last_input = None
+        self.d_kernel = np.zeros_like(self.kernel)
+
+    @classmethod
+    def create(cls, nb_filtres, kH, kW, D_entree, stride=1):
+        scale = np.sqrt(2.0 / (kH * kW * D_entree))
+        kernel = np.random.randn(nb_filtres, kH, kW, D_entree) * scale
+        return cls(kernel, stride)
 
     def patch_generator(self, image):
         nb_filtres, kernel_height, kernel_width, kernel_channels = self.kernel.shape
@@ -19,14 +28,47 @@ class ConvolutionLayer:
         if image.ndim == 2:
             image = image[:, :, np.newaxis]
 
-        nb_filtres, kernel_h, kernel_w, kernel_c = self.kernel.shape
-        img_h, img_w, img_c = image.shape
-        out_h = (img_h - kernel_h) // self.stride + 1
-        out_w = (img_w - kernel_w) // self.stride + 1
-        output = np.zeros((out_h, out_w, nb_filtres), dtype=np.float64)
+        self._last_input = image
+        nb_filtres, kH, kW, kC = self.kernel.shape
+        img_H, img_W, _ = image.shape
+        out_H = (img_H - kH) // self.stride + 1
+        out_W = (img_W - kW) // self.stride + 1
 
-        for i, j, patch in self.patch_generator(image):
-            for f in range(nb_filtres):
-                output[i // self.stride, j // self.stride, f] = self.kernel_convolution(patch, self.kernel[f])
+        s0, s1, s2 = image.strides
+        patches = np.lib.stride_tricks.as_strided(
+            image,
+            shape=(out_H, out_W, kH, kW, kC),
+            strides=(s0 * self.stride, s1 * self.stride, s0, s1, s2),
+        )
+        patches_2d = patches.reshape(out_H * out_W, kH * kW * kC)
+        kernel_2d  = self.kernel.reshape(nb_filtres, kH * kW * kC)
+        return (patches_2d @ kernel_2d.T).reshape(out_H, out_W, nb_filtres)
 
-        return output
+    def backward(self, grad):
+        nb_filtres, kH, kW, kC = self.kernel.shape
+        out_H, out_W = grad.shape[0], grad.shape[1]
+        s = self.stride
+
+        self.d_kernel = np.zeros_like(self.kernel)
+        d_input = np.zeros_like(self._last_input)
+
+        grad_2d = grad.reshape(out_H * out_W, nb_filtres)
+
+        for kh in range(kH):
+            for kw in range(kW):
+                patch = self._last_input[kh:kh + out_H * s:s, kw:kw + out_W * s:s, :]
+                patch_2d = patch.reshape(out_H * out_W, kC)  # [N, kC]
+
+                self.d_kernel[:, kh, kw, :] = grad_2d.T @ patch_2d
+
+                d_input[kh:kh + out_H * s:s, kw:kw + out_W * s:s, :] += (
+                    grad_2d @ self.kernel[:, kh, kw, :]
+                ).reshape(out_H, out_W, kC)
+
+        return d_input
+
+    def zero_grads(self):
+        self.d_kernel[:] = 0.0
+
+    def get_params_and_grads(self):
+        return [(self.kernel, self.d_kernel)]
