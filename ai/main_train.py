@@ -27,6 +27,23 @@ def _to_cpu(x):
     return x.get() if hasattr(x, "get") else x
 
 
+def save_checkpoint(path, blocs, fc1, fc2, epoch, val_acc):
+    """Sauvegarde les poids du modèle (CONV + FC) dans un fichier .npz."""
+    data = {}
+    for bi, bloc in enumerate(blocs):
+        for ci, conv in enumerate(bloc["convs"]):
+            data[f"conv_{bi}_{ci}"] = _to_cpu(conv.kernel)
+    for ni, neuron in enumerate(fc1.neurons):
+        data[f"fc1_w_{ni}"] = neuron.weights
+        data[f"fc1_b_{ni}"] = neuron.bias
+    for ni, neuron in enumerate(fc2.neurons):
+        data[f"fc2_w_{ni}"] = neuron.weights
+        data[f"fc2_b_{ni}"] = neuron.bias
+    data["epoch"]   = np.array([epoch])
+    data["val_acc"] = np.array([val_acc])
+    np.savez(path, **data)
+
+
 from ConvolutionLayer import ConvolutionLayer as CONV
 from RectifiedLinearUnitLayer import RectifiedLinearUnitLayer as RELU
 from PoolingLayer import PoolingLayer as POOL
@@ -42,10 +59,10 @@ import dashboard_server as dashboard
 # ─────────────────────────────────────────────
 #  Hyperparamètres
 # ─────────────────────────────────────────────
-NB_EPOCHS     = 20
+NB_EPOCHS     = 30
 LEARNING_RATE = 0.001
 MOMENTUM      = 0.9
-NB_FILTRES    = 32    # ≥32 requis pour matrices cuBLAS efficaces (CONV2+ : [N,288]@[288,32])
+NB_FILTRES    = 48    # ≥32 requis pour matrices cuBLAS efficaces
 NB_BLOCS      = 5
 NB_CONV_BLOC  = 3
 FC_HIDDEN     = 128
@@ -56,6 +73,7 @@ STRIDE_POOL   = 2
 BATCH_SIZE    = 8     # optimal RTX 5080 484×660 float32 (batch=16+ → OOM activations >16GB VRAM)
 GRAD_CLIP     = 1.0   # clip élément par élément des gradients (anti-explosion)
 LOG_INTERVAL  = 1     # log + broadcast dashboard toutes les N batches
+CLASS_WEIGHTS = None  # pondération désactivée
 
 # Dataset régénéré à 484×660 px (÷2, ratio identique à l'original 968×1320)
 IMAGE_TARGET_SIZE = None  # images déjà à la bonne taille
@@ -64,9 +82,10 @@ IMAGE_TARGET_SIZE = None  # images déjà à la bonne taille
 DEBUG_MAX_IMAGES = None  # ex: 32 pour vérifier le pipeline rapidement
 
 # Chemins depuis la racine du projet (D:/Docker/TruePneumoniaAI/)
-_ROOT = os.path.join(os.path.dirname(__file__), "..")
-TRAIN_DIR = os.path.join(_ROOT, "data", "dataset", "train")
-VAL_DIR   = os.path.join(_ROOT, "data", "dataset", "val")
+_ROOT          = os.path.join(os.path.dirname(__file__), "..")
+TRAIN_DIR      = os.path.join(_ROOT, "data", "dataset", "train")
+VAL_DIR        = os.path.join(_ROOT, "data", "dataset", "val")
+CHECKPOINT_DIR = os.path.join(_ROOT, "checkpoints")
 
 CLASS_NAMES = ["Normal", "Bactérien", "Viral"]
 SEP = "=" * 55
@@ -258,7 +277,10 @@ def main():
     learnable_layers.extend([fc1, fc2])
     optimizer = SGDOptimizer(learnable_layers, learning_rate=LEARNING_RATE, momentum=MOMENTUM)
 
-    loss_fn = CrossEntropyLoss()
+    loss_fn = CrossEntropyLoss(CLASS_WEIGHTS)
+
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    best_val_acc = 0.0
 
     n_train    = len(train_data)
     n_batches  = (n_train + BATCH_SIZE - 1) // BATCH_SIZE   # arrondi haut
@@ -450,6 +472,15 @@ def main():
                 for c in range(3)
             ],
         })
+
+        # Sauvegarde checkpoint
+        ckpt_latest = os.path.join(CHECKPOINT_DIR, "checkpoint_latest.npz")
+        save_checkpoint(ckpt_latest, blocs, fc1, fc2, epoch, val_acc)
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            ckpt_best = os.path.join(CHECKPOINT_DIR, "checkpoint_best.npz")
+            save_checkpoint(ckpt_best, blocs, fc1, fc2, epoch, val_acc)
+            print(f"  → Meilleur modèle sauvegardé (epoch {epoch}, val_acc={val_acc:.3f})")
 
     print(f"\n{SEP}")
     print("  Entraînement terminé")
