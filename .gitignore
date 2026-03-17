@@ -18,3 +18,4 @@ chest_Xray/
 data/*/outputs/*.jpg
 data/dataset/*/*.jpg
 ai/outputs/*.jpg
+checkpoints/*.npz
