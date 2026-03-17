@@ -73,7 +73,6 @@ STRIDE_POOL   = 2
 BATCH_SIZE    = 8     # optimal RTX 5080 484×660 float32 (batch=16+ → OOM activations >16GB VRAM)
 GRAD_CLIP     = 1.0   # clip élément par élément des gradients (anti-explosion)
 LOG_INTERVAL  = 1     # log + broadcast dashboard toutes les N batches
-CLASS_WEIGHTS = None  # pondération désactivée
 
 # Dataset régénéré à 484×660 px (÷2, ratio identique à l'original 968×1320)
 IMAGE_TARGET_SIZE = None  # images déjà à la bonne taille
@@ -277,7 +276,7 @@ def main():
     learnable_layers.extend([fc1, fc2])
     optimizer = SGDOptimizer(learnable_layers, learning_rate=LEARNING_RATE, momentum=MOMENTUM)
 
-    loss_fn = CrossEntropyLoss(CLASS_WEIGHTS)
+    loss_fn = CrossEntropyLoss()
 
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     best_val_acc = 0.0
