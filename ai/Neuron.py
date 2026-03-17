@@ -14,8 +14,10 @@ class Neuron:
         return np.sum(input_data * self.weights) + self.bias[0]
 
     def backward(self, grad_scalar):
-        self.d_weights = grad_scalar * self._last_input
-        self.d_bias[0] = grad_scalar
+        # Accumulation : permet d'appeler backward plusieurs fois par batch
+        # avant zero_grads (appelé une seule fois en début de batch).
+        self.d_weights += grad_scalar * self._last_input
+        self.d_bias[0] += grad_scalar
 
     def get_params_and_grads(self):
         return [(self.weights, self.d_weights), (self.bias, self.d_bias)]

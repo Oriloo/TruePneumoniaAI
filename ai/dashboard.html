@@ -102,12 +102,16 @@
 
   <div class="left-col">
     <div class="chart-card">
-      <h2>Loss en direct (derniers 100 batches)</h2>
+      <h2>Loss en direct (derniers 500 batches)</h2>
       <canvas id="chart-live" height="130"></canvas>
     </div>
     <div class="chart-card">
       <h2>Loss par epoch (train + val)</h2>
       <canvas id="chart-loss" height="130"></canvas>
+    </div>
+    <div class="chart-card">
+      <h2>Accuracy en direct (derniers 500 batches)</h2>
+      <canvas id="chart-live-acc" height="130"></canvas>
     </div>
     <div class="chart-card">
       <h2>Accuracy par epoch (train + val)</h2>
@@ -125,6 +129,10 @@
       <h2>Distribution des prédictions (epoch courante)</h2>
       <canvas id="chart-dist" height="130"></canvas>
     </div>
+    <div class="chart-card">
+      <h2>Accuracy par classe — Train (live) · Val (fin d'époque)</h2>
+      <canvas id="chart-class-acc" height="130"></canvas>
+    </div>
   </div>
 
 </div>
@@ -141,7 +149,7 @@ function fmt(sec) {
 
 const C = {
   train: '#4299e1', val: '#68d391', live: '#f6ad55',
-  normal: 'rgba(99,179,237,.8)', bacteria: 'rgba(252,129,74,.8)', viral: 'rgba(154,117,234,.8)',
+  normal: '#63b3ed', bacteria: '#fc814a', viral: '#9a75ea',
 };
 
 // Options communes pour les charts axe X numérique (points par image)
@@ -173,6 +181,25 @@ const chartLive = new Chart(document.getElementById('chart-live').getContext('2d
   }
 });
 
+const chartLiveAcc = new Chart(document.getElementById('chart-live-acc').getContext('2d'), {
+  type: 'line',
+  data: { labels: [], datasets: [{
+    label: 'Accuracy batch', data: [], borderColor: C.val, backgroundColor: C.val+'22',
+    tension: 0.3, pointRadius: 0, fill: true,
+  }]},
+  options: {
+    responsive: true, animation: { duration: 0 },
+    scales: {
+      x: { ticks: { color: '#718096', maxTicksLimit: 8 }, grid: { color: '#2d3748' } },
+      y: {
+        ticks: { color: '#718096', callback: v => (v * 100).toFixed(0) + '%' },
+        grid: { color: '#2d3748' }, beginAtZero: true, max: 1,
+      },
+    },
+    plugins: { legend: { labels: { color: '#a0aec0', boxWidth: 10, font: { size: 10 } } } },
+  }
+});
+
 // Charts Loss & Accuracy : axe X = image globale, train dense + val sparse
 const chartLoss = new Chart(document.getElementById('chart-loss').getContext('2d'), {
   type: 'line',
@@ -194,6 +221,30 @@ const chartAcc = new Chart(document.getElementById('chart-acc').getContext('2d')
       tension: 0, pointRadius: 5, pointHoverRadius: 7, showLine: false },
   ]},
   options: xyChartOptions(),
+});
+
+const chartClassAcc = new Chart(document.getElementById('chart-class-acc').getContext('2d'), {
+  type: 'bar',
+  data: {
+    labels: ['Normal', 'Bactérien', 'Viral'],
+    datasets: [
+      { label: 'Train', data: [0, 0, 0],
+        backgroundColor: [C.normal+'99', C.bacteria+'99', C.viral+'99'], borderRadius: 4 },
+      { label: 'Val',   data: [null, null, null],
+        backgroundColor: [C.normal, C.bacteria, C.viral], borderRadius: 4 },
+    ]
+  },
+  options: {
+    responsive: true, animation: { duration: 200 },
+    scales: {
+      x: { ticks: { color: '#718096' }, grid: { color: '#2d3748' } },
+      y: {
+        ticks: { color: '#718096', callback: v => (v * 100).toFixed(0) + '%' },
+        grid: { color: '#2d3748' }, beginAtZero: true, max: 1,
+      },
+    },
+    plugins: { legend: { labels: { color: '#a0aec0', boxWidth: 10, font: { size: 10 } } } },
+  }
 });
 
 const chartDist = new Chart(document.getElementById('chart-dist').getContext('2d'), {
@@ -231,11 +282,16 @@ function onBatch(d) {
   document.getElementById('m-eta-epoch').textContent = fmt(d.eta_epoch);
   document.getElementById('m-eta-total').textContent = fmt(d.eta_total);
 
-  // Live loss (derniers 100 batches)
+  // Live loss & accuracy (derniers 500 batches)
   if (d.batch_loss_history) {
     chartLive.data.labels = d.batch_loss_history.map((_, i) => i + 1);
     chartLive.data.datasets[0].data = d.batch_loss_history;
     chartLive.update('none');
+  }
+  if (d.batch_acc_history) {
+    chartLiveAcc.data.labels = d.batch_acc_history.map((_, i) => i + 1);
+    chartLiveAcc.data.datasets[0].data = d.batch_acc_history;
+    chartLiveAcc.update('none');
   }
 
   // Loss & Accuracy par image (train) — point {x: global_step, y: value}
@@ -249,6 +305,12 @@ function onBatch(d) {
   // Distribution
   chartDist.data.datasets[0].data = d.prediction_distribution;
   chartDist.update('none');
+
+  // Accuracy par classe (train live)
+  if (d.class_accuracy_train) {
+    chartClassAcc.data.datasets[0].data = d.class_accuracy_train;
+    chartClassAcc.update('none');
+  }
 
   // CAM
   if (d.cam_image) {
@@ -279,6 +341,16 @@ function onEpoch(d) {
   // Reset barre batch
   document.getElementById('prog-batch').style.width = '0%';
   document.getElementById('lbl-batch').textContent  = `0 / ${d.total_batches ?? '—'}`;
+
+  // Accuracy par classe (val + train final de l'époque)
+  if (d.class_accuracy_val) {
+    chartClassAcc.data.datasets[1].data = d.class_accuracy_val;
+    chartClassAcc.update('none');
+  }
+  if (d.class_accuracy_train_final) {
+    chartClassAcc.data.datasets[0].data = d.class_accuracy_train_final;
+    chartClassAcc.update('none');
+  }
 
   if (d.cam_image) {
     document.getElementById('cam-placeholder').style.display = 'none';

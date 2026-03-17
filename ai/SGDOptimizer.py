@@ -1,6 +1,3 @@
-import numpy as np
-
-
 class SGDOptimizer:
     def __init__(self, layers, learning_rate=0.01, momentum=0.9):
         self.layers = layers
@@ -13,7 +10,9 @@ class SGDOptimizer:
             for param, grad in layer.get_params_and_grads():
                 key = id(param)
                 if key not in self._velocities:
-                    self._velocities[key] = np.zeros_like(param)
+                    # param * 0.0 crée un tableau nul du même type (numpy ou cupy)
+                    # et du même device que le paramètre — pas besoin d'importer xp
+                    self._velocities[key] = param * 0.0
                 v = self._velocities[key]
                 v *= self.momentum
                 v += self.lr * grad
