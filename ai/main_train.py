@@ -51,6 +51,7 @@ from GlobalAveragePoolingLayer import GlobalAveragePoolingLayer as GAP
 from ClassActivationMapLayer import ClassActivationMapLayer as CAM
 from FullyConnected import FullyConnectedLayer as FC
 from SoftmaxLayer import SoftmaxLayer as SOFTMAX
+from DropoutLayer import DropoutLayer as DROPOUT
 from CrossEntropyLoss import CrossEntropyLoss
 from SGDOptimizer import SGDOptimizer
 from DatasetLoader import DatasetLoader
@@ -59,7 +60,7 @@ import dashboard_server as dashboard
 # ─────────────────────────────────────────────
 #  Hyperparamètres
 # ─────────────────────────────────────────────
-NB_EPOCHS     = 30
+NB_EPOCHS     = 50
 LEARNING_RATE = 0.001
 MOMENTUM      = 0.9
 NB_FILTRES    = 48    # ≥32 requis pour matrices cuBLAS efficaces
@@ -73,6 +74,9 @@ STRIDE_POOL   = 2
 BATCH_SIZE    = 8     # optimal RTX 5080 484×660 float32 (batch=16+ → OOM activations >16GB VRAM)
 GRAD_CLIP     = 1.0   # clip élément par élément des gradients (anti-explosion)
 LOG_INTERVAL  = 1     # log + broadcast dashboard toutes les N batches
+DROPOUT_RATE  = 0.5   # taux de dropout entre relu_fc et fc2
+EARLY_STOP_PATIENCE = 8   # arrêt si pas d'amélioration val_acc pendant N epochs
+LR_MIN        = 1e-5  # LR minimum pour le cosine annealing
 
 # Dataset régénéré à 484×660 px (÷2, ratio identique à l'original 968×1320)
 IMAGE_TARGET_SIZE = None  # images déjà à la bonne taille
@@ -88,6 +92,34 @@ CHECKPOINT_DIR = os.path.join(_ROOT, "checkpoints")
 
 CLASS_NAMES = ["Normal", "Bactérien", "Viral"]
 SEP = "=" * 55
+
+
+# ─────────────────────────────────────────────
+#  Augmentation de données (CPU, uint8)
+# ─────────────────────────────────────────────
+def augment_batch(images):
+    """
+    images : numpy uint8 [batch, H, W]
+    Applique aléatoirement sur chaque image :
+      - Flip horizontal (p=0.5)
+      - Jitter brightness/contrast (facteur ∈ [0.85, 1.15])
+    Retourne un tableau uint8 de même forme.
+    """
+    result = images.copy()
+    for i in range(result.shape[0]):
+        if np.random.rand() < 0.5:
+            result[i] = np.fliplr(result[i])
+        factor = np.random.uniform(0.85, 1.15)
+        result[i] = np.clip(result[i].astype(np.float32) * factor, 0, 255).astype(np.uint8)
+    return result
+
+
+# ─────────────────────────────────────────────
+#  Cosine annealing LR
+# ─────────────────────────────────────────────
+def cosine_lr(epoch, total_epochs, lr_max, lr_min=LR_MIN):
+    """Décroissance cosinus de lr_max à lr_min sur total_epochs."""
+    return lr_min + 0.5 * (lr_max - lr_min) * (1 + np.cos(np.pi * (epoch - 1) / total_epochs))
 
 
 # ─────────────────────────────────────────────
@@ -113,8 +145,9 @@ def build_network():
 
     gap     = GAP()
     relu_fc = RELU()
+    dropout = DROPOUT(DROPOUT_RATE)
     softmax = SOFTMAX()
-    return blocs, gap, relu_fc, softmax
+    return blocs, gap, relu_fc, dropout, softmax
 
 
 # ─────────────────────────────────────────────
@@ -163,8 +196,10 @@ def backward_gpu(grad_gap_np, blocs, gap):
 # ─────────────────────────────────────────────
 #  Forward image seule (validation)
 # ─────────────────────────────────────────────
-def forward_single(image, blocs, gap, relu_fc, fc1, fc2, softmax):
-    """Utilisé uniquement pour la validation (image seule, pas de gradient)."""
+def forward_single(image, blocs, gap, relu_fc, dropout, fc1, fc2, softmax):
+    """Utilisé uniquement pour la validation (image seule, pas de gradient).
+    Le dropout est désactivé (training=False) pendant l'inférence.
+    """
     data = xp.asarray(image.astype(np.float32))
     if data.ndim == 2:
         data = data[:, :, xp.newaxis]
@@ -178,6 +213,7 @@ def forward_single(image, blocs, gap, relu_fc, fc1, fc2, softmax):
     data = gap.forward(data)
     data_cpu = _to_cpu(data)
     data_cpu = relu_fc.forward(fc1.forward(data_cpu))
+    # dropout désactivé en validation
     output = softmax.forward(fc2.forward(data_cpu))
     return output, _to_cpu(last_fmaps)
 
@@ -204,7 +240,7 @@ def compute_cam_b64(last_fmaps, fc1, fc2, predicted_class):
     return "data:image/jpeg;base64," + base64.b64encode(buf).decode("utf-8")
 
 
-def evaluate(val_data, blocs, gap, relu_fc, fc1, fc2, softmax):
+def evaluate(val_data, blocs, gap, relu_fc, dropout, fc1, fc2, softmax):
     """Calcule loss, accuracy globale et accuracy par classe sur la validation."""
     loss_fn = CrossEntropyLoss()
     total_loss = 0.0
@@ -213,7 +249,7 @@ def evaluate(val_data, blocs, gap, relu_fc, fc1, fc2, softmax):
     total_per_class   = [0, 0, 0]
 
     for image, label in val_data:
-        output, _ = forward_single(image, blocs, gap, relu_fc, fc1, fc2, softmax)
+        output, _ = forward_single(image, blocs, gap, relu_fc, dropout, fc1, fc2, softmax)
         total_loss += loss_fn.forward(output, label)
         predicted = int(np.argmax(output))
         total_per_class[label] += 1
@@ -263,12 +299,12 @@ def main():
         return
 
     print("\n[2] Construction du réseau…")
-    blocs, gap, relu_fc, softmax = build_network()
+    blocs, gap, relu_fc, dropout, softmax = build_network()
 
     D = NB_FILTRES
     fc1 = FC(D, FC_HIDDEN)
     fc2 = FC(FC_HIDDEN, 3)
-    print(f"     GAP → {D} canaux  |  FC({D}→{FC_HIDDEN})  |  FC({FC_HIDDEN}→3)")
+    print(f"     GAP → {D} canaux  |  FC({D}→{FC_HIDDEN})  |  Dropout({DROPOUT_RATE})  |  FC({FC_HIDDEN}→3)")
 
     learnable_layers = []
     for bloc in blocs:
@@ -279,17 +315,25 @@ def main():
     loss_fn = CrossEntropyLoss()
 
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-    best_val_acc = 0.0
+    best_val_acc     = 0.0
+    early_stop_count = 0
 
     n_train    = len(train_data)
     n_batches  = (n_train + BATCH_SIZE - 1) // BATCH_SIZE   # arrondi haut
     history    = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
 
     print(f"\n[3] Entraînement : {NB_EPOCHS} epochs — {n_train} images ({n_batches} batches/epoch)")
-    print(f"     LR={LEARNING_RATE}  momentum={MOMENTUM}  filtres={NB_FILTRES}  batch={BATCH_SIZE}")
+    print(f"     LR={LEARNING_RATE}→{LR_MIN} (cosine)  momentum={MOMENTUM}  filtres={NB_FILTRES}  batch={BATCH_SIZE}")
+    print(f"     Dropout={DROPOUT_RATE}  EarlyStopping patience={EARLY_STOP_PATIENCE}")
     print(SEP)
 
     for epoch in range(1, NB_EPOCHS + 1):
+        # Cosine annealing : met à jour le LR au début de chaque epoch
+        lr_epoch = cosine_lr(epoch, NB_EPOCHS, LEARNING_RATE)
+        optimizer.set_lr(lr_epoch)
+
+        dropout.training = True   # activer le dropout en entraînement
+
         t_start    = time.time()
         epoch_loss = 0.0
         correct    = 0
@@ -313,8 +357,9 @@ def main():
             batch_raw  = items_raw[b_start:b_end]
             actual_bs  = len(batch_raw)
 
-            # uint8 → stacked numpy (float64 converti sur GPU dans forward_gpu)
+            # uint8 → stacked numpy + augmentation
             batch_images = np.stack([img for img, _ in batch_raw])  # [bs, H, W] uint8
+            batch_images = augment_batch(batch_images)
             batch_labels = [lbl for _, lbl in batch_raw]
 
             # 1. Mise à zéro des gradients (une fois par batch)
@@ -331,10 +376,11 @@ def main():
 
             for b in range(actual_bs):
                 # Forward FC (CPU)
-                fc1_out = fc1.forward(gap_outs[b])
-                relu_out = relu_fc.forward(fc1_out)
-                fc2_out = fc2.forward(relu_out)
-                output  = softmax.forward(fc2_out)
+                fc1_out     = fc1.forward(gap_outs[b])
+                relu_out    = relu_fc.forward(fc1_out)
+                dropout_out = dropout.forward(relu_out)
+                fc2_out     = fc2.forward(dropout_out)
+                output      = softmax.forward(fc2_out)
 
                 lbl = batch_labels[b]
                 loss_val = loss_fn.forward(output, lbl)
@@ -350,6 +396,7 @@ def main():
                 # Backward FC (accumule les gradients dans les neurones)
                 grad = loss_fn.backward()
                 grad = fc2.backward(grad)
+                grad = dropout.backward(grad)
                 grad = relu_fc.backward(grad)
                 grad = fc1.backward(grad)   # CPU [NB_FILTRES]
                 grad_gaps.append(grad)
@@ -431,9 +478,10 @@ def main():
         train_loss = epoch_loss / n_train
         train_acc  = correct / n_train
 
-        # Validation
+        # Validation (dropout désactivé)
+        dropout.training = False
         print(f"\n  Epoch {epoch:02d} — validation…", end='\r')
-        val_loss, val_acc, class_acc_val = evaluate(val_data, blocs, gap, relu_fc, fc1, fc2, softmax)
+        val_loss, val_acc, class_acc_val = evaluate(val_data, blocs, gap, relu_fc, dropout, fc1, fc2, softmax)
 
         history["train_loss"].append(float(train_loss))
         history["val_loss"].append(float(val_loss))
@@ -443,7 +491,7 @@ def main():
         print(f"  Epoch {epoch:02d}/{NB_EPOCHS} "
               f"| Loss train={train_loss:.4f} val={val_loss:.4f} "
               f"| Acc train={train_acc:.3f} val={val_acc:.3f} "
-              f"| {epoch_time:.1f}s")
+              f"| LR={lr_epoch:.2e} | {epoch_time:.1f}s")
 
         cam_b64 = None
         if last_fmaps_cam is not None:
@@ -476,10 +524,16 @@ def main():
         ckpt_latest = os.path.join(CHECKPOINT_DIR, "checkpoint_latest.npz")
         save_checkpoint(ckpt_latest, blocs, fc1, fc2, epoch, val_acc)
         if val_acc > best_val_acc:
-            best_val_acc = val_acc
+            best_val_acc     = val_acc
+            early_stop_count = 0
             ckpt_best = os.path.join(CHECKPOINT_DIR, "checkpoint_best.npz")
             save_checkpoint(ckpt_best, blocs, fc1, fc2, epoch, val_acc)
-            print(f"  → Meilleur modèle sauvegardé (epoch {epoch}, val_acc={val_acc:.3f})")
+            print(f"  -> Meilleur modele sauvegarde (epoch {epoch}, val_acc={val_acc:.3f})")
+        else:
+            early_stop_count += 1
+            if early_stop_count >= EARLY_STOP_PATIENCE:
+                print(f"\n  [Early Stopping] Pas d'amelioration depuis {EARLY_STOP_PATIENCE} epochs.")
+                break
 
     print(f"\n{SEP}")
     print("  Entraînement terminé")
